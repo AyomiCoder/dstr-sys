@@ -2,14 +2,22 @@ package httpserver
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
+	"strings"
 
-	"dstr_sys/internal/config"
+	"github.com/AyomiCoder/dstr-sys.git/internal/config"
+	"github.com/AyomiCoder/dstr-sys.git/internal/notification"
 )
 
-func NewRouter(cfg config.Config) http.Handler {
+const maxNotificationBodyBytes int64 = 1 << 20 // 1MB
+
+func NewRouter(cfg config.Config, store *notification.Store) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", healthHandler(cfg))
+	mux.HandleFunc("POST /notifications", createNotificationHandler(store))
+	mux.HandleFunc("GET /notifications", listNotificationsHandler(store))
 
 	return mux
 }
@@ -32,4 +40,91 @@ func healthHandler(cfg config.Config) http.HandlerFunc {
 			return
 		}
 	}
+}
+
+func createNotificationHandler(store *notification.Store) http.HandlerFunc {
+	type createNotificationRequest struct {
+		Type      string `json:"type"`
+		Recipient string `json:"recipient"`
+		Message   string `json:"message"`
+	}
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		contentType := r.Header.Get("Content-Type")
+		if contentType != "" && !strings.HasPrefix(contentType, "application/json") {
+			writeJSONError(w, http.StatusUnsupportedMediaType, "content type must be application/json")
+			return
+		}
+
+		r.Body = http.MaxBytesReader(w, r.Body, maxNotificationBodyBytes)
+		defer r.Body.Close()
+
+		var req createNotificationRequest
+		decoder := json.NewDecoder(r.Body)
+		decoder.DisallowUnknownFields()
+
+		if err := decoder.Decode(&req); err != nil {
+			var syntaxErr *json.SyntaxError
+			switch {
+			case errors.As(err, &syntaxErr):
+				writeJSONError(w, http.StatusBadRequest, "malformed json body")
+			case errors.Is(err, io.EOF):
+				writeJSONError(w, http.StatusBadRequest, "request body is required")
+			default:
+				writeJSONError(w, http.StatusBadRequest, "invalid request body")
+			}
+			return
+		}
+
+		var extra json.RawMessage
+		if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+			writeJSONError(w, http.StatusBadRequest, "request body must contain a single json object")
+			return
+		}
+
+		req.Type = strings.TrimSpace(req.Type)
+		req.Recipient = strings.TrimSpace(req.Recipient)
+		req.Message = strings.TrimSpace(req.Message)
+
+		if req.Type == "" || req.Recipient == "" || req.Message == "" {
+			writeJSONError(w, http.StatusBadRequest, "type, recipient, and message are required")
+			return
+		}
+
+		created := store.Create(notification.CreateInput{
+			Type:      req.Type,
+			Recipient: req.Recipient,
+			Message:   req.Message,
+		})
+
+		writeJSON(w, http.StatusCreated, created)
+	}
+}
+
+func listNotificationsHandler(store *notification.Store) http.HandlerFunc {
+	type listNotificationsResponse struct {
+		Notifications []notification.Notification `json:"notifications"`
+	}
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		items := store.List()
+		writeJSON(w, http.StatusOK, listNotificationsResponse{Notifications: items})
+	}
+}
+
+func writeJSON(w http.ResponseWriter, statusCode int, payload any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+
+	if err := json.NewEncoder(w).Encode(payload); err != nil {
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+	}
+}
+
+func writeJSONError(w http.ResponseWriter, statusCode int, message string) {
+	type errorResponse struct {
+		Error string `json:"error"`
+	}
+
+	writeJSON(w, statusCode, errorResponse{Error: message})
 }

@@ -6,16 +6,18 @@ import (
 	"net/http"
 	"time"
 
-	"dstr_sys/internal/config"
-	httpserver "dstr_sys/internal/http"
+	"github.com/AyomiCoder/dstr-sys.git/internal/config"
+	httpserver "github.com/AyomiCoder/dstr-sys.git/internal/http"
+	"github.com/AyomiCoder/dstr-sys.git/internal/notification"
 )
 
 func main() {
 	cfg := config.Load()
+	store := notification.NewStore()
 
 	server := &http.Server{
 		Addr:              ":" + cfg.Port,
-		Handler:           httpserver.NewRouter(cfg),
+		Handler:           httpserver.NewRouter(cfg, store),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,

@@ -13,15 +13,6 @@ import (
 
 const maxNotificationBodyBytes int64 = 1 << 20 // 1MB
 
-func NewRouter(cfg config.Config, store *notification.Store) http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /health", healthHandler(cfg))
-	mux.HandleFunc("POST /notifications", createNotificationHandler(store))
-	mux.HandleFunc("GET /notifications", listNotificationsHandler(store))
-
-	return mux
-}
-
 func healthHandler(cfg config.Config) http.HandlerFunc {
 	type healthResponse struct {
 		Status  string `json:"status"`
@@ -42,7 +33,16 @@ func healthHandler(cfg config.Config) http.HandlerFunc {
 	}
 }
 
-func createNotificationHandler(store *notification.Store) http.HandlerFunc {
+func NewRouter(cfg config.Config, repo notification.Repository) http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /health", healthHandler(cfg))
+	mux.HandleFunc("POST /notifications", createNotificationHandler(repo))
+	mux.HandleFunc("GET /notifications", listNotificationsHandler(repo))
+
+	return mux
+}
+
+func createNotificationHandler(repo notification.Repository) http.HandlerFunc {
 	type createNotificationRequest struct {
 		Type      string `json:"type"`
 		Recipient string `json:"recipient"`
@@ -91,23 +91,32 @@ func createNotificationHandler(store *notification.Store) http.HandlerFunc {
 			return
 		}
 
-		created := store.Create(notification.CreateInput{
+		created, err := repo.Create(r.Context(), notification.CreateInput{
 			Type:      req.Type,
 			Recipient: req.Recipient,
 			Message:   req.Message,
 		})
+		if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, "failed to create notification")
+			return
+		}
 
 		writeJSON(w, http.StatusCreated, created)
 	}
 }
 
-func listNotificationsHandler(store *notification.Store) http.HandlerFunc {
+func listNotificationsHandler(repo notification.Repository) http.HandlerFunc {
 	type listNotificationsResponse struct {
 		Notifications []notification.Notification `json:"notifications"`
 	}
 
 	return func(w http.ResponseWriter, r *http.Request) {
-		items := store.List()
+		items, err := repo.List(r.Context())
+		if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, "failed to fetch notifications")
+			return
+		}
+
 		writeJSON(w, http.StatusOK, listNotificationsResponse{Notifications: items})
 	}
 }

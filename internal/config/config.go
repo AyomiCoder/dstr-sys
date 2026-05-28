@@ -1,6 +1,10 @@
 package config
 
-import "os"
+import (
+	"errors"
+	"os"
+	"strings"
+)
 
 const (
 	defaultPort        = "7070"
@@ -10,9 +14,10 @@ const (
 type Config struct {
 	Port        string
 	ServiceName string
+	DatabaseURL string
 }
 
-func Load() Config {
+func Load() (Config, error) {
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = defaultPort
@@ -23,8 +28,14 @@ func Load() Config {
 		serviceName = defaultServiceName
 	}
 
+	databaseURL := os.Getenv("DATABASE_URL")
+	if strings.TrimSpace(databaseURL) == "" {
+		return Config{}, errors.New("DATABASE_URL is required")
+	}
+
 	return Config{
 		Port:        port,
 		ServiceName: serviceName,
-	}
+		DatabaseURL: databaseURL,
+	}, nil
 }
